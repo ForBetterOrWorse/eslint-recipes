@@ -1,0 +1,194 @@
+// @shared case v1.0.0
+// Ported from change-case v5.4.4:
+// https://github.com/blakeembrey/change-case/blob/change-case@5.4.4/packages/change-case/src/index.ts
+// Changes: Omitted unrelated case converters and the splitSeparateNumbers export.
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 For Better Or Worse (changes)
+//
+// Original license:
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Blake Embrey (hello@blakeembrey.com)
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
+const SPLIT_LOWER_UPPER_RE = /([\p{Ll}\d])(\p{Lu})/gu;
+const SPLIT_UPPER_UPPER_RE = /(\p{Lu})([\p{Lu}][\p{Ll}])/gu;
+const SPLIT_SEPARATE_NUMBER_RE = /(\d)\p{Ll}|(\p{L})\d/u;
+const DEFAULT_STRIP_REGEXP = /[^\p{L}\d]+/giu;
+const SPLIT_REPLACE_VALUE = '$1\0$2';
+const DEFAULT_PREFIX_SUFFIX_CHARACTERS = '';
+
+export type Locale = string[] | string | false | undefined;
+
+export interface PascalCaseOptions extends Options {
+  mergeAmbiguousCharacters?: boolean;
+}
+
+export interface Options {
+  locale?: Locale;
+  split?: (value: string) => string[];
+  separateNumbers?: boolean;
+  delimiter?: string;
+  prefixCharacters?: string;
+  suffixCharacters?: string;
+}
+
+export function split(value: string) {
+  let result = value.trim();
+
+  result = result
+    .replace(SPLIT_LOWER_UPPER_RE, SPLIT_REPLACE_VALUE)
+    .replace(SPLIT_UPPER_UPPER_RE, SPLIT_REPLACE_VALUE);
+
+  result = result.replace(DEFAULT_STRIP_REGEXP, '\0');
+
+  let start = 0;
+  let end = result.length;
+
+  while (result.charAt(start) === '\0') {
+    start++;
+  }
+  if (start === end) {
+    return [];
+  }
+  while (result.charAt(end - 1) === '\0') {
+    end--;
+  }
+
+  return result.slice(start, end).split(/\0/g);
+}
+
+function splitSeparateNumbers(value: string) {
+  const words = split(value);
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const match = SPLIT_SEPARATE_NUMBER_RE.exec(word);
+    if (match) {
+      const offset = match.index + (match[1] ?? match[2]).length;
+      words.splice(i, 1, word.slice(0, offset), word.slice(offset));
+    }
+  }
+  return words;
+}
+
+function noCase(input: string, options?: Options) {
+  const [prefix, words, suffix] = splitPrefixSuffix(input, options);
+  return prefix + words.map(lowerFactory(options?.locale)).join(options?.delimiter ?? ' ') + suffix;
+}
+
+export function camelCase(input: string, options?: PascalCaseOptions) {
+  const [prefix, words, suffix] = splitPrefixSuffix(input, options);
+  const lower = lowerFactory(options?.locale);
+  const upper = upperFactory(options?.locale);
+  const transform = options?.mergeAmbiguousCharacters
+    ? capitalCaseTransformFactory(lower, upper)
+    : pascalCaseTransformFactory(lower, upper);
+  return (
+    prefix +
+    words
+      .map((word, index) => {
+        if (index === 0) {
+          return lower(word);
+        }
+        return transform(word, index);
+      })
+      .join(options?.delimiter ?? '') +
+    suffix
+  );
+}
+
+export function pascalCase(input: string, options?: PascalCaseOptions) {
+  const [prefix, words, suffix] = splitPrefixSuffix(input, options);
+  const lower = lowerFactory(options?.locale);
+  const upper = upperFactory(options?.locale);
+  const transform = options?.mergeAmbiguousCharacters
+    ? capitalCaseTransformFactory(lower, upper)
+    : pascalCaseTransformFactory(lower, upper);
+  return prefix + words.map(transform).join(options?.delimiter ?? '') + suffix;
+}
+
+export function kebabCase(input: string, options?: Options) {
+  return noCase(input, { delimiter: '-', ...options });
+}
+
+export function snakeCase(input: string, options?: Options) {
+  return noCase(input, { delimiter: '_', ...options });
+}
+
+function lowerFactory(locale: Locale): (input: string) => string {
+  return locale === false
+    ? (input: string) => input.toLowerCase()
+    : (input: string) => input.toLocaleLowerCase(locale);
+}
+
+function upperFactory(locale: Locale): (input: string) => string {
+  return locale === false
+    ? (input: string) => input.toUpperCase()
+    : (input: string) => input.toLocaleUpperCase(locale);
+}
+
+function capitalCaseTransformFactory(
+  lower: (input: string) => string,
+  upper: (input: string) => string
+) {
+  return (word: string) => `${upper(word[0])}${lower(word.slice(1))}`;
+}
+
+function pascalCaseTransformFactory(
+  lower: (input: string) => string,
+  upper: (input: string) => string
+) {
+  return (word: string, index: number) => {
+    const char0 = word[0];
+    const initial = index > 0 && char0 >= '0' && char0 <= '9' ? `_${char0}` : upper(char0);
+    return initial + lower(word.slice(1));
+  };
+}
+
+function splitPrefixSuffix(input: string, options: Options = {}): [string, string[], string] {
+  const splitFn = options.split ?? (options.separateNumbers ? splitSeparateNumbers : split);
+  const prefixCharacters = options.prefixCharacters ?? DEFAULT_PREFIX_SUFFIX_CHARACTERS;
+  const suffixCharacters = options.suffixCharacters ?? DEFAULT_PREFIX_SUFFIX_CHARACTERS;
+  let prefixIndex = 0;
+  let suffixIndex = input.length;
+
+  while (prefixIndex < input.length) {
+    const char = input.charAt(prefixIndex);
+    if (!prefixCharacters.includes(char)) {
+      break;
+    }
+    prefixIndex++;
+  }
+
+  while (suffixIndex > prefixIndex) {
+    const index = suffixIndex - 1;
+    const char = input.charAt(index);
+    if (!suffixCharacters.includes(char)) {
+      break;
+    }
+    suffixIndex = index;
+  }
+
+  return [
+    input.slice(0, prefixIndex),
+    splitFn(input.slice(prefixIndex, suffixIndex)),
+    input.slice(suffixIndex),
+  ];
+}

@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["eslint-rules", "lib", "__fixtures__", "vitest.config.ts", "eslint.config.ts"]
+}

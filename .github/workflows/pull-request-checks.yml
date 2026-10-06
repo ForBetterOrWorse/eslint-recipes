@@ -1,0 +1,212 @@
+name: Pull request checks
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+      - labeled
+      - unlabeled
+
+permissions: {}
+
+# Label events for unrelated labels get their own group so they never cancel a real run.
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}-${{ contains(fromJSON('["labeled","unlabeled"]'), github.event.action) && !startsWith(github.event.label.name, 'version:') && github.run_id || 'checks' }}
+  cancel-in-progress: true
+
+jobs:
+  pending:
+    if: >-
+      !github.event.pull_request.head.repo.fork
+      && (
+        !contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
+        || startsWith(github.event.label.name, 'version:')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Mark PR checks pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            --method POST \
+            --field state=pending \
+            --field context=checks \
+            --field description="PR checks are running"
+
+  bump:
+    if: >-
+      !contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
+      || startsWith(github.event.label.name, 'version:')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch base branch for fork PR
+        if: github.event.pull_request.head.repo.fork
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git remote add upstream "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch upstream "$BASE_REF"
+          git update-ref "refs/remotes/origin/$BASE_REF" "refs/remotes/upstream/$BASE_REF"
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Bump copied rules
+        continue-on-error: ${{ github.event.pull_request.head.repo.fork }}
+        env:
+          VERSION_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: pnpm bump
+
+      - name: Save version changes as a patch
+        run: |
+          git add --all -- eslint-rules
+          git diff --cached --binary > "$RUNNER_TEMP/bump.patch"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bump-patch
+          path: ${{ runner.temp }}/bump.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  checks:
+    needs: bump
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: bump-patch
+          path: ${{ runner.temp }}
+
+      - name: Apply version changes
+        run: |
+          if [ -s "$RUNNER_TEMP/bump.patch" ]; then
+            git apply "$RUNNER_TEMP/bump.patch"
+          fi
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+
+      - run: pnpm typecheck
+
+      - run: pnpm vitest run --reporter=dot
+
+      - name: Explain fork PR requirements
+        if: ${{ always() && github.event.pull_request.head.repo.fork }}
+        run: |
+          echo "This workflow cannot push to a fork or post a commit status."
+          echo "Ask a maintainer to choose the version level, then run pnpm bump locally with that version label and push the generated changes."
+          exit 1
+
+  # Runs no code from the PR: it only applies the patch produced by the bump job.
+  push-bump:
+    needs: bump
+    if: ${{ !github.event.pull_request.head.repo.fork }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: bump-patch
+          path: ${{ runner.temp }}
+
+      - name: Commit version changes
+        id: commit
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ -s "$RUNNER_TEMP/bump.patch" ]; then
+            git apply --index --include='eslint-rules/*' "$RUNNER_TEMP/bump.patch"
+          fi
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore: bump versions"
+            git push origin "HEAD:refs/heads/$HEAD_REF"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  report:
+    needs:
+      - pending
+      - bump
+      - checks
+      - push-bump
+    if: >-
+      !cancelled()
+      && needs.bump.result != 'skipped'
+      && !github.event.pull_request.head.repo.fork
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Report PR checks result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          SHA: ${{ needs.push-bump.outputs.sha || github.event.pull_request.head.sha }}
+        run: |
+          state=success
+          description="PR checks passed"
+          for result in $RESULTS; do
+            if [ "$result" != success ]; then
+              state=failure
+              description="PR checks failed"
+            fi
+          done
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            --method POST \
+            --field state="$state" \
+            --field context=checks \
+            --field description="$description"

@@ -1,0 +1,28 @@
+{
+  "name": "eslint-recipes",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "bump": "jiti lib/version-bump-cli.ts",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/css": "2.0.0",
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.13.3",
+    "@vitest/eslint-plugin": "1.6.23",
+    "eslint": "10.8.0",
+    "jiti": "2.7.0",
+    "lint-staged": "15.5.2",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.65.0",
+    "vitest": "4.1.10"
+  },
+  "lint-staged": {
+    "**/*.ts": "prettier --write"
+  }
+}
