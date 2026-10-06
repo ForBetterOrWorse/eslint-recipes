@@ -155,6 +155,11 @@ export default defineConfig([
       ],
       consumerRoot
     );
-    expect(vitestOutput).toMatch(/Test Files\s+6 passed\s+\(6\)/u);
+    const ansiEscape = String.fromCharCode(27);
+    const plainVitestOutput = vitestOutput.replace(
+      new RegExp(`${ansiEscape}\\[[0-?]*[ -/]*[@-~]`, 'gu'),
+      ''
+    );
+    expect(plainVitestOutput).toMatch(/Test Files\s+6 passed\s+\(6\)/u);
   }, 60_000);
 });
